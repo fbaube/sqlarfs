@@ -1,6 +1,3 @@
-// Package sqlarfs provides an implementation of [io/fs.FS] for [SQLite Archive Files] via [database/sql].
-//
-// [SQLite Archive Files]: https://sqlite.org/sqlar.html
 package sqlarfs
 
 import (
@@ -18,26 +15,36 @@ import (
 	"time"
 )
 
-// FS documents the [io/fs] interfaces provided by this implementation of [io/fs.FS].
+// FS documents the [io/fs] interfaces provides by this
+// implementation of [io/fs.FS]. [io/fs.StatFS] provides
+// [io/fs.FileInfo] and [io/fs.ReadDirFS] provides
+// [io/fs.ReadDir] (name string) ([]DirEntry, error)
+// . 
 type FS interface {
 	fs.FS
 	fs.StatFS
 	fs.ReadDirFS
 }
 
-// New returns an instance of [io/fs.FS] that allows to access the files in an [SQLite Archive File] opened with [database/sql].
+// New returns an instance of [io/fs.FS] that provides access to
+// the files in an [SQLite Archive File] opened with [database/sql].
 //
-// db is a [database/sql] handle to the SQLite Archive file. Two drivers are known to work: [github.com/mattn/sqlite3] and [modernc.org/sqlite].
-// sqlarfs uses caching for the directory structure, and so it assumes
-// that the sqlar table is not modified while browsing the filesystem. So if the sqlar table is modified, create a new instance.
+// db is a [database/sql] handle to the SQLite Archive file. Two drivers
+// are known to work: [github.com/mattn/sqlite3] and [modernc.org/sqlite].
+// 
+// NOTE: sqlarfs uses caching for the directory structure, and so it 
+// assumes that the sqlar table is not modified while browsing the 
+// filesystem. So if the sqlar table is modified, create a new instance.
 //
-// For maximum performance, open the SQLite database in read-only, immutable mode:
+// For best performance, open the SQLite DB in read-only, immutable mode:
 //
 //	file:<path>?mode=ro&immutable=1
 //
-// The default permission mask used to enforce file permissions ('mode' column in the 'sqlar' table) is [PermAny].
+// The default permission mask used to enforce file permissions
+// ('mode' column in the 'sqlar' table) is [PermAny].
 //
 // [SQLite Archive File]: https://sqlite.org/sqlar.html
+// . 
 func New(db *sql.DB, opts ...Option) FS {
 	ar := &arfs{db: db, permMask: PermAny}
 	for _, o := range opts {
@@ -65,7 +72,9 @@ var _ FS = (*arfs)(nil)
 
 // Option is an option for [New].
 //
-// Available options: [PermOwner], [PermGroup], [PermOthers], [PermAny].
+// Available options: [PermOwner],
+// [PermGroup], [PermOthers], [PermAny].
+// .
 type Option interface {
 	apply(*arfs)
 }
@@ -74,13 +83,18 @@ const (
 	PermOwner  PermMask = 0700
 	PermGroup  PermMask = 0070
 	PermOthers PermMask = 0007
-	PermAny    PermMask = 0777 // Allow to read (traverse for directories) any file that have at least one permission bit for either owner/group/others
+	// PermAny provides read access (or traverse for directories)
+	// to any file that has at least one permission bit for either
+	// owner/group/others
+	PermAny    PermMask = 0777 
 )
 
-// PermMask is a permission mask for enforcing [fs.FileMode] permissions
-// (disallow to read files, disallow traversing or listing directories) in an SQLite Archive File.
+// PermMask is a permission mask for enforcing [fs.FileMode]
+// permissions (disallow to read files, disallow traversing
+// or listing directories) in an SQLite Archive File.
 //
 // PermMask is an [Option] for [New].
+// . 
 type PermMask uint32
 
 func (p PermMask) apply(ar *arfs) {
@@ -157,7 +171,8 @@ func (fi *fileinfo) Sys() any {
 
 type dirInfoCache struct {
 	mu   sync.RWMutex
-	info map[string]*fileinfo // Keys are directory paths validated with io/fs.ValidPath
+	// info keys are directory paths validated with io/fs.ValidPath
+	info map[string]*fileinfo 
 }
 
 func (di *dirInfoCache) load(path string) *fileinfo {
@@ -172,7 +187,8 @@ func (di *dirInfoCache) store(path string, fi *fileinfo) *fileinfo {
 	if di.info == nil {
 		di.info = make(map[string]*fileinfo)
 	} else {
-		// Keep the earlier value because a new one has been recently allocated
+		// Keep the earlier value because a
+		// new one has been recently allocated
 		if fi2 := di.info[path]; fi2 != nil {
 			return fi2
 		}
@@ -183,13 +199,16 @@ func (di *dirInfoCache) store(path string, fi *fileinfo) *fileinfo {
 
 const escapeLikeChar = "§"
 
-var escapeLike = strings.NewReplacer("%", escapeLikeChar+"%", "_", escapeLikeChar+"_", "!", escapeLikeChar+"!")
+var escapeLike = strings.NewReplacer(
+"%", escapeLikeChar+"%",
+"_", escapeLikeChar+"_",
+"!", escapeLikeChar+"!")
 
 const (
 	dirMode          uint32 = syscall.S_IFDIR | 0555
-	sqlModeFilter           = `((mode&49152)>>9)<>0` // Skip files with broken mode: 49152 = syscall.S_IFREG|syscall.S_IFDIR
-	sqlModeFilterDir        = `(mode&16384)<>0`      // 16384 = syscall.S_IFDIR => directories
-	sqlModeFilterReg        = `(mode&32768)<>0`      // 32768 = syscall.S_IFREG => regular files
+	sqlModeFilter    = `((mode&49152)>>9)<>0` // Skip files with broken mode: 49152 = syscall.S_IFREG|syscall.S_IFDIR
+	sqlModeFilterDir = `(mode&16384)<>0`      // 16384 = syscall.S_IFDIR => directories
+	sqlModeFilterReg = `(mode&32768)<>0`      // 32768 = syscall.S_IFREG => regular files
 )
 
 func (ar *arfs) ReadDir(name string) ([]fs.DirEntry, error) {
@@ -257,7 +276,7 @@ func (ar *arfs) readDir(name string) ([]fs.DirEntry, error) {
 		if err := fi.scan(rows.Scan); err != nil {
 			return entries, err
 		}
-		// Some archives may have entries for directories
+		// Some archives may have entries for directories.
 		// In that case we ignore the duplicates we created in the SQL
 		if fi.IsDir() {
 			if _, seen := subdirs[fi.name]; seen {
@@ -283,13 +302,15 @@ func (ar *arfs) Stat(name string) (fs.FileInfo, error) {
 	if name == "." {
 		info, err := ar.statRoot()
 		if err != nil {
-			return nil, &fs.PathError{Op: "stat", Path: name, Err: err}
+			return nil, &fs.PathError{
+			       Op: "stat", Path: name, Err: err}
 		}
 		return info, err
 	}
 
 	if !fs.ValidPath(name) {
-		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
+		return nil, &fs.PathError{
+		       Op: "stat", Path: name, Err: fs.ErrInvalid}
 	}
 
 	fi, err := ar.stat(name)
@@ -410,6 +431,7 @@ func (ar *arfs) stat(name string) (*fileinfo, error) {
 // file gives access to a file in an SQLite Archive file.
 //
 // *file implements interface [fs.File].
+// .
 type file struct {
 	fs   *arfs
 	info fileinfo
@@ -420,6 +442,7 @@ type file struct {
 // dir gives access to a directory in an SQLite Archive file.
 //
 // *dir implements interface [fs.ReadDirFile].
+// .
 type dir struct {
 	file
 	entries []fs.DirEntry
@@ -434,10 +457,12 @@ func (f *file) Stat() (fs.FileInfo, error) {
 func (f *file) Read(b []byte) (int, error) {
 	if f.r == nil {
 		if f.fs == nil { // Closed
-			return 0, &fs.PathError{Op: "read", Path: f.path, Err: fs.ErrClosed}
+			return 0, &fs.PathError{
+			       Op: "read", Path: f.path, Err: fs.ErrClosed}
 		}
 		if !f.fs.canRead(f.info.mode) {
-			return 0, &fs.PathError{Op: "read", Path: f.path, Err: fs.ErrPermission}
+			return 0, &fs.PathError{
+			       Op: "read", Path: f.path, Err: fs.ErrPermission}
 		}
 		var buf []byte
 		err := f.fs.db.QueryRow(``+
@@ -451,9 +476,11 @@ func (f *file) Read(b []byte) (int, error) {
 		case nil:
 			// OK
 		case sql.ErrNoRows:
-			return 0, &fs.PathError{Op: "read", Path: f.path, Err: fs.ErrNotExist}
+			return 0, &fs.PathError{
+			       Op: "read", Path: f.path, Err: fs.ErrNotExist}
 		default:
-			return 0, &fs.PathError{Op: "read", Path: f.path, Err: err}
+			return 0, &fs.PathError{
+			       Op: "read", Path: f.path, Err: err}
 		}
 		if len(buf) == int(f.info.sz) {
 			f.r = io.NopCloser(bytes.NewReader(buf))
@@ -512,15 +539,18 @@ func (ar *arfs) Open(name string) (fs.File, error) {
 	if name == "." {
 		info, err = ar.statRoot()
 		if err != nil {
-			return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+			return nil, &fs.PathError{
+			       Op: "open", Path: name, Err: err}
 		}
 	} else {
 		if !fs.ValidPath(name) {
-			return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+			return nil, &fs.PathError{
+			       Op: "open", Path: name, Err: fs.ErrInvalid}
 		}
 		info, err = ar.stat(name)
 		if err != nil {
-			return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+			return nil, &fs.PathError{
+			       Op: "open", Path: name, Err: err}
 		}
 	}
 
